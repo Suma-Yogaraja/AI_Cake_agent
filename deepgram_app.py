@@ -14,6 +14,8 @@ import random
 import string
 import time
 import threading
+from twilio.request_validator import RequestValidator
+from datetime import datetime
 
 load_dotenv()
 
@@ -41,6 +43,25 @@ You can help with:
 
 If you don't know something, say you'll pass the message to the team.
 """
+
+def validate_twilio_request(request:Request ,form_data:dict)->bool:
+    validator=RequestValidator(os.getenv("TWILIO_AUTH_TOKEN"))
+    url=str(request.url)
+    signature=request.headers.get("X-Twilio-Signature", "")
+    is_valid=validator.validate(url,form_data,signature)
+    print("---- TWILIO VALIDATION DEBUG ----")
+    print("URL:", url)
+    print("Signature:", signature)
+    print("Valid:", is_valid)
+    print("---------------------------------")
+    return is_valid
+
+def is_open():
+    now=datetime.now()
+    if now.weekday==6:#sunday
+        return False
+    return 9<=now.hour<18
+
 
 def get_db():
     return psycopg2.connect(
@@ -256,8 +277,14 @@ async def voice(request: Request):
     print(f"BASE_URL is: {os.getenv('BASE_URL')}")
     call_sid = form.get("CallSid", "unknown")
     conversation_store[call_sid] = []
+    if not validate_twilio_request(request, dict(form)):
+        print("Invalid Twilio signature — request rejected")
+        return Response("Forbidden", status_code=403)
 
-    greeting = "Hello! Welcome to Butter and Batter Bakery. How can I help you today?"
+    if not is_open():
+        greeting="Hi! We're currently closed, but I can still take your order and our team will confirm it once we're back between 9am and 6pm. How can I help you?"
+    else:
+        greeting = "Hello! Welcome to Butter and Batter Bakery. How can I help you today?"
     filename = f"audio_{uuid.uuid4()}.wav"
     text_to_speech(greeting, filename)
     threading.Thread(target=cleanup_file, args=(filename,)).start()
@@ -276,9 +303,13 @@ async def voice(request: Request):
 
 @app.post("/process", response_class=Response)
 async def process(request: Request):
+    
     form = await request.form()
     call_sid = form.get("CallSid", "unknown")
     recording_url = form.get("RecordingUrl", "")
+    if not validate_twilio_request(request, dict(form)):
+        print("Invalid Twilio signature — request rejected")
+        return Response("Forbidden", status_code=403)
 
     response = VoiceResponse()
     history = conversation_store.get(call_sid, [])
@@ -316,7 +347,7 @@ async def process(request: Request):
     recent_history = history[-4:] if len(history) > 4 else history
     conversation_context = " ".join([m["content"] for m in recent_history])
     search_query = f"{conversation_context} {transcript}"
-    context = search_knowledge_base(search_query,limit=8)
+    context = search_knowledge_base(search_query,limit=10)
     print(f"context found:{context}")
 
     # Build enhanced system prompt with knowledge
@@ -353,14 +384,20 @@ async def process(request: Request):
     base_url = os.getenv("BASE_URL")
 
     if "ORDER_COMPLETE" in ai_reply:
-        clean_reply = ai_reply.replace("ORDER_COMPLETE", "").strip()
+        clean_reply = ai_reply.replace("ORDER_COMPLETE", "").replace("Goodbye!", "").strip()
         order_id = generate_order_id()
         details = extract_order_details(history)
         save_order(order_id, details)
         print(f"Order saved: {order_id}")
-
-        final_message = clean_reply + f" Your order ID is {order_id}. Goodbye!"
-        final_message = clean_reply + f" Your order ID is {order_id}. Goodbye!"
+        if not is_open():
+            final_message=(
+                clean_reply+
+                f"your order ID is {order_id}."
+                "sice we're currently closed,our team will confirm your order when we reopen!"
+            )
+        else:
+            final_message = clean_reply + f" Your order ID is {order_id}. Goodbye!"
+        
         emotion = detect_emotion(ai_reply, history)
         emotional_text = apply_emotion(final_message, "celebratory")
         filename = f"audio_{uuid.uuid4()}.wav"
