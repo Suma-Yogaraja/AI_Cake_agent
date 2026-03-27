@@ -7,6 +7,7 @@ from twilio.twiml.voice_response import VoiceResponse
 from twilio.request_validator import RequestValidator
 from datetime import datetime
 from app.services.tts import text_to_speech, cleanup_file
+from twilio.twiml.voice_response import VoiceResponse, Connect
 
 router = APIRouter()
 
@@ -46,18 +47,18 @@ async def voice(request: Request):
     else:
         greeting = "Hello! Welcome to Butter and Batter Bakery. How can I help you today?"
 
-    filename = f"audio_{uuid.uuid4()}.wav"
+    filename = f"static/audio_{uuid.uuid4()}.wav"
     text_to_speech(greeting, filename)
     threading.Thread(target=cleanup_file, args=(filename,)).start()
 
     base_url = os.getenv("BASE_URL")
     response = VoiceResponse()
-    response.play(f"{base_url}/{filename}")
-    response.record(
-        action="/process",
-        method="POST",
-        max_length=10,
-        play_beep=False,
-        timeout=3
+    response.play(f"{base_url}/{os.path.basename(filename)}")
+    connect = Connect()
+    connect.stream(
+        url=f"wss://{base_url.replace('https://', '')}/stream/{call_sid}",
+        track="inbound_track"
     )
+    response.append(connect)
+    response.pause(length=60)
     return Response(str(response), media_type="application/xml")

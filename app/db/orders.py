@@ -1,5 +1,4 @@
 import os
-import re
 import random
 import string
 import psycopg2
@@ -17,9 +16,6 @@ def generate_order_id():
     numbers = ''.join(random.choices(string.digits, k=4))
     return f"SW-{numbers}"
 
-def clean_phone(phone: str) -> str:
-    return re.sub(r'\D', '', phone)
-
 def save_order(order_id, details):
     lines = details.strip().split("\n")
     data = {}
@@ -31,15 +27,16 @@ def save_order(order_id, details):
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO orders (order_id, customer_name, cake_flavour, cake_size, cake_message, customer_phone)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO orders (order_id, customer_name, cake_flavour, cake_size, cake_message, customer_phone,allergies)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """, (
         order_id,
         data.get("NAME", "unknown"),
         data.get("FLAVOUR", "unknown"),
         data.get("SIZE", "unknown"),
         data.get("MESSAGE", "none"),
-        clean_phone(data.get("PHONE", "unknown"))
+        data.get("PHONE", "unknown"),
+        data.get("ALLERGIES", "none")
     ))
     conn.commit()
     cur.close()

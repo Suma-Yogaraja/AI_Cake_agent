@@ -4,6 +4,7 @@ import threading
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from twilio.twiml.voice_response import VoiceResponse
+from twilio.request_validator import RequestValidator
 from app.services.stt import transcribe_with_deepgram
 from app.services.tts import text_to_speech, cleanup_file
 from app.services.llm import get_llm_response, extract_order_details
@@ -37,6 +38,7 @@ async def process(request: Request):
         )
         return Response(str(response), media_type="application/xml")
 
+    # Transcribe
     transcript = transcribe_with_deepgram(recording_url)
 
     if not transcript.strip():
@@ -53,6 +55,7 @@ async def process(request: Request):
     print(f"User said: {transcript}")
     history.append({"role": "user", "content": transcript})
 
+    # GPT-4o
     ai_reply = get_llm_response(call_sid, transcript, history)
     history.append({"role": "assistant", "content": ai_reply})
     conversation_store[call_sid] = history
@@ -67,23 +70,29 @@ async def process(request: Request):
         print(f"Order saved: {order_id}")
 
         if not is_open():
-            final_message = clean_reply + f" Your order ID is {order_id}. Since we are currently closed, our team will confirm your order when we reopen!"
+            final_message = (
+                clean_reply +
+                f" Your order ID is {order_id}."
+                " Since we're currently closed, our team will confirm your order when we reopen!"
+            )
         else:
             final_message = clean_reply + f" Your order ID is {order_id}. Goodbye!"
 
         emotional_text = apply_emotion(final_message, "celebratory")
-        filename = f"audio_{uuid.uuid4()}.wav"
+        filename = f"static/audio_{uuid.uuid4()}.wav"
         text_to_speech(emotional_text, filename)
         threading.Thread(target=cleanup_file, args=(filename,)).start()
+
         response.play(f"{base_url}/{filename}")
         response.hangup()
     else:
         emotion = detect_emotion(ai_reply, history)
         print(f"Emotion detected: {emotion}")
         emotional_text = apply_emotion(ai_reply, emotion)
-        filename = f"audio_{uuid.uuid4()}.wav"
+        filename = f"static/audio_{uuid.uuid4()}.wav"
         text_to_speech(emotional_text, filename)
         threading.Thread(target=cleanup_file, args=(filename,)).start()
+
         response.play(f"{base_url}/{filename}")
         response.record(
             action="/process",
