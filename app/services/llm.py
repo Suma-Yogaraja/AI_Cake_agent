@@ -1,5 +1,7 @@
 import os
 from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv()
 from app.services.rag import search_knowledge_base
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

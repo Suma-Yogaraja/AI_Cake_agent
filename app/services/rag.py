@@ -1,37 +1,43 @@
+import os
+from dotenv import load_dotenv
 from openai import OpenAI
-from app.db.connection import get_db_connection
-from app.config import OPENAI_API_KEY
+import psycopg2
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+load_dotenv()
+
+def get_db():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD")
+    )
 
 def get_embedding(text):
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.embeddings.create(
-        model="text-embedding-ada-002",
+        model="text-embedding-3-small",
         input=text
     )
     return response.data[0].embedding
 
-def search_knowledge_base(query, top_k=3):
-    try:
-        query_embedding = get_embedding(query)
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT content, category,
-                   1 - (embedding <=> %s::vector) AS similarity
-            FROM knowledge_base
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-        """, (query_embedding, query_embedding, top_k))
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-        if not results:
-            return ""
-        context = "\n\n".join([
-            f"[{r['category']}]: {r['content']}" for r in results
-        ])
-        return context
-    except Exception as e:
-        print(f" RAG search error: {e}")
+def search_knowledge_base(query: str, limit: int = 20) -> str:
+    print(f"Searching knowledge base for: {query[:100]}")
+    query_embedding = get_embedding(query)
+    conn = get_db()
+    cur = conn.cursor()
+    embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+    cur.execute("""
+        SELECT content, category
+        FROM knowledge_base
+        ORDER BY embedding <-> %s::vector
+        LIMIT %s
+    """, (embedding_str, limit))
+    results = cur.fetchall()
+    cur.close()
+    conn.close()
+    if not results:
         return ""
+    context = "\n".join([f"[{row[1].upper()}] {row[0]}" for row in results])
+    return context

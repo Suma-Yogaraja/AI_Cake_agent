@@ -5,9 +5,8 @@ from deepgram import DeepgramClient, SpeakOptions
 
 load_dotenv()
 
-deepgram = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
-
 def text_to_speech(text: str, filename: str) -> str:
+    deepgram = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
     print(f"Generating TTS for: {text[:50]}...")
     start = time.time()
     options = SpeakOptions(

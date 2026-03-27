@@ -6,9 +6,8 @@ from deepgram import DeepgramClient, PrerecordedOptions
 
 load_dotenv()
 
-deepgram = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
-
 def transcribe_with_deepgram(recording_url: str) -> str:
+    deepgram = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
     audio_url = recording_url + ".wav"
     print(f"Downloading audio from: {audio_url}")
     start = time.time()
