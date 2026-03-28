@@ -58,7 +58,7 @@ def validate_twilio_request(request:Request ,form_data:dict)->bool:
 
 def is_open():
     now=datetime.now()
-    if now.weekday==6:#sunday
+    if now.weekday()==6:#sunday
         return False
     return 9<=now.hour<18
 

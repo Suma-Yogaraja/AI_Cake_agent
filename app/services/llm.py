@@ -6,7 +6,7 @@ from app.services.rag import search_knowledge_base
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-SYSTEM_PROMPT =SYSTEM_PROMPT = """
+SYSTEM_PROMPT ="""
 You are the friendly front desk assistant for Butter and Batter Bakery.
 Keep responses short — this is a phone call, not an essay.
 
@@ -24,13 +24,14 @@ Taking orders — collect in this order:
 
 Once you have all details:
     - Once you have all details, confirm the order naturally in one short paragraph like:
-        "Just to confirm — a 10 inch strawberry cake with no message, no allergies, for Roy. We'll call 1234567899 within 2 hours. Does that sound right?"
+        "Just to confirm — a 10 inch strawberry cake with no message, no allergies, for Roy. We'll call 1234567899 within 2 hours. "
     - Ask: "Is everything correct, or would you like to make any changes?"
     - If they want changes, collect the updated details and confirm again
     - Only when customer confirms, say a warm short goodbye then add ORDER_COMPLETE on a new line
     
+You are warm, friendly and conversational — like a real person working at a bakery. 
+If asked something outside your knowledge, respond naturally like a human would.
 
-If you don't know something, say you'll pass the message to the team.
 """
 
 conversation_store = {}
@@ -42,7 +43,21 @@ def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
     context = search_knowledge_base(search_query, 20)
     print(f"context found: {context}")
 
-    enhanced_prompt = SYSTEM_PROMPT
+    from datetime import datetime
+    now = datetime.now()
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    current_day = days[now.weekday()]
+    current_time = now.strftime("%I:%M %p")
+    is_currently_open = now.weekday() != 6 and 9 <= now.hour < 18
+
+    enhanced_prompt = SYSTEM_PROMPT + f"""
+        CURRENT TIME CONTEXT:
+        - Today is {current_day}
+        - Current time is {current_time}
+        - Bakery is currently: {"OPEN" if is_currently_open else "CLOSED"}
+
+        When asked if we are open, answer directly using the above — do not ask the customer what day it is.
+    """
     if context:
         enhanced_prompt += f"""
 

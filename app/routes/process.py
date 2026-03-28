@@ -83,7 +83,7 @@ async def process(request: Request):
         text_to_speech(emotional_text, filename)
         threading.Thread(target=cleanup_file, args=(filename,)).start()
 
-        response.play(f"{base_url}/{filename}")
+        response.play(f"{base_url}/{os.path.basename(filename)}")
         response.hangup()
     else:
         emotion = detect_emotion(ai_reply, history)
@@ -93,7 +93,7 @@ async def process(request: Request):
         text_to_speech(emotional_text, filename)
         threading.Thread(target=cleanup_file, args=(filename,)).start()
 
-        response.play(f"{base_url}/{filename}")
+        response.play(f"{base_url}/{os.path.basename(filename)}")
         response.record(
             action="/process",
             method="POST",
