@@ -2,6 +2,7 @@ import asyncio
 import os
 import uuid
 import threading
+import time
 from dotenv import load_dotenv
 from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
 from app.services.llm import get_llm_response, extract_order_details
@@ -19,6 +20,7 @@ deepgram_client = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
 inactivity_counts = {}
 inactivity_timers = {}
 event_loop = None
+call_timings = {}
 
 def schedule_inactivity(call_sid: str, seconds: int = 30):
     existing = inactivity_timers.get(call_sid)
@@ -53,6 +55,11 @@ def say_to_caller(call_sid: str, message: str):
     filename = f"audio_{uuid.uuid4()}.wav"
     filepath = f"static/{filename}"
     text_to_speech(message, filepath)
+    start_time = call_timings.get(call_sid)
+    if start_time:
+        turnaround = round(time.time() - start_time, 2)
+        print(f" Total turnaround time: {turnaround} seconds")
+        call_timings.pop(call_sid, None)
     threading.Thread(target=cleanup_file, args=(filepath,)).start()
     host = base_url.replace("https://", "").replace("http://", "")
     twilio_client.calls(call_sid).update(
@@ -205,18 +212,26 @@ async def handle_stream(websocket, call_sid: str):
             if silence_timer:
                 silence_timer.cancel()
             full_transcript = " ".join(transcript_buffer)
-            transcript_buffer.clear()
-            silence_timer = loop.call_later(
-                2.0,
-                lambda: asyncio.run_coroutine_threadsafe(
-                    process_transcript(call_sid, full_transcript),
-                    loop
-                )
-            )
+    
         except Exception as e:
             print(f"Transcript error: {e}")
-
+        
+    def on_utterance_end(self, utterance_end, **kwargs):
+        print("Utterance ended — customer finished speaking")
+        call_timings[call_sid] = time.time()
+        if transcript_buffer:
+            full_transcript = " ".join(transcript_buffer)
+            transcript_buffer.clear()
+            if silence_timer:
+                silence_timer.cancel()
+            asyncio.run_coroutine_threadsafe(
+                process_transcript(call_sid, full_transcript),
+                loop
+            )
     dg_connection.on(LiveTranscriptionEvents.Transcript, on_transcript)
+    dg_connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
+
+    
     options = LiveOptions(
         model="nova-2",
         language="en-IN",
