@@ -34,7 +34,7 @@ def is_open():
 @router.post("/voice")
 async def voice(request: Request):
     form = await request.form()
-    print(f"BASE_URL is: {os.getenv('BASE_URL')}")
+    # print(f"BASE_URL is: {os.getenv('BASE_URL')}")
     call_sid = form.get("CallSid", "unknown")
     conversation_store[call_sid] = []
 

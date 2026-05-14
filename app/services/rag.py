@@ -23,7 +23,7 @@ def get_embedding(text):
     return response.data[0].embedding
 
 def search_knowledge_base(query: str, limit: int = 20) -> str:
-    print(f"Searching knowledge base for: {query[:100]}")
+    # print(f"Searching knowledge base for: {query[:100]}")
     query_embedding = get_embedding(query)
     conn = get_db()
     cur = conn.cursor()

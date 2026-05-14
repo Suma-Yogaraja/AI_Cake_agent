@@ -37,11 +37,11 @@ If asked something outside your knowledge, respond naturally like a human would.
 conversation_store = {}
 
 def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
-    recent_history = history[-4:] if len(history) > 4 else history
+    recent_history = history[-10:] if len(history) > 10 else history
     conversation_context = " ".join([m["content"] for m in recent_history])
     search_query = f"{conversation_context} {transcript}"
     context = search_knowledge_base(search_query, 20)
-    print(f"context found: {context}")
+    # print(f"context found: {context}")
 
     from datetime import datetime
     now = datetime.now()
@@ -70,7 +70,7 @@ def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
         - If the customer asks about price, location, hours, delivery — the answer IS in the knowledge base above
         - Only say you'll pass to the team if the topic is completely absent from the knowledge base
         """
-        print(f"Enhanced prompt context section: {context[:200]}")
+        # print(f"Enhanced prompt context section: {context[:200]}")
     else:
         print("No context added to prompt")
 
