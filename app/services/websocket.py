@@ -18,15 +18,16 @@ load_dotenv()
 deepgram_client = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
 
 # Per-call state — all dicts keyed by call_sid, never shared across calls
-active_websockets = {}  # call_sid -> WebSocket
-stream_sids = {}        # call_sid -> Twilio streamSid
-event_loops = {}        # call_sid -> asyncio event loop
-inactivity_counts = {}  # call_sid -> int
-inactivity_timers = {}  # call_sid -> TimerHandle
-is_ai_speaking = {}     # call_sid -> bool (suppress STT while AI is talking)
-is_processing = {}      # call_sid -> bool (prevent concurrent LLM calls)
-call_timings = {}       # call_sid -> float (turnaround time logging)
-mark_events = {}        # mark_name -> asyncio.Event (track audio playback completion)
+active_websockets = {}    # call_sid -> WebSocket
+stream_sids = {}          # call_sid -> Twilio streamSid
+event_loops = {}          # call_sid -> asyncio event loop
+inactivity_counts = {}    # call_sid -> int
+inactivity_timers = {}    # call_sid -> TimerHandle
+is_ai_speaking = {}       # call_sid -> bool (suppress STT while AI is talking)
+is_processing = {}        # call_sid -> bool (prevent concurrent LLM calls)
+call_timings = {}         # call_sid -> float (turnaround time logging)
+mark_events = {}          # mark_name -> asyncio.Event (track audio playback completion)
+pending_transcripts = {}  # call_sid -> str (speech captured while AI was talking)
 
 
 def schedule_inactivity(call_sid: str, seconds: int = 30):
@@ -40,6 +41,11 @@ def schedule_inactivity(call_sid: str, seconds: int = 30):
         return
 
     def on_inactivity():
+        # AI is mid-response — don't interrupt, reschedule and check again later
+        if is_processing.get(call_sid) or is_ai_speaking.get(call_sid):
+            inactivity_timers[call_sid] = loop.call_later(seconds, on_inactivity)
+            return
+
         count = inactivity_counts.get(call_sid, 0) + 1
         inactivity_counts[call_sid] = count
         print(f"Inactivity count for {call_sid}: {count}")
@@ -82,7 +88,7 @@ async def send_audio_to_caller(call_sid: str, mulaw_bytes: bytes) -> asyncio.Eve
         }))
 
     # Mark sent after all audio — Twilio echoes it when audio finishes playing
-    mark_name = f"end_{uuid.uuid4().hex[:8]}"
+    mark_name = f"{call_sid}_{uuid.uuid4().hex[:8]}"
     ev = asyncio.Event()
     mark_events[mark_name] = ev
     await ws.send_text(json.dumps({
@@ -95,55 +101,77 @@ async def send_audio_to_caller(call_sid: str, mulaw_bytes: bytes) -> asyncio.Eve
 
 async def say_to_caller(call_sid: str, message: str):
     """Generate TTS and deliver it to the caller over the existing WebSocket.
-    Blocks until Twilio confirms playback is complete, then resets inactivity."""
+    Blocks until Twilio confirms playback is complete, then resets inactivity.
+    Guarantees is_ai_speaking is cleared and inactivity is reset even on failure."""
     start_time = call_timings.pop(call_sid, None)
     if start_time:
         print(f"Total turnaround time: {round(time.time() - start_time, 2)} seconds")
 
     is_ai_speaking[call_sid] = True
-    mulaw_bytes = await asyncio.to_thread(text_to_speech_mulaw_bytes, message)
-    done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
-
     try:
-        await asyncio.wait_for(done_event.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
-        print(f"Mark timeout for {call_sid} — continuing anyway")
-
-    is_ai_speaking[call_sid] = False
-    # Reset inactivity timer now that AI has finished speaking
-    schedule_inactivity(call_sid)
+        mulaw_bytes = await asyncio.to_thread(text_to_speech_mulaw_bytes, message)
+        done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
+        try:
+            await asyncio.wait_for(done_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            print(f"Mark timeout for {call_sid} — continuing anyway")
+    except Exception as e:
+        print(f"TTS/send failed for {call_sid}: {e}")
+    finally:
+        is_ai_speaking[call_sid] = False
+        # If customer spoke while AI was talking, process that now instead of
+        # resetting the inactivity timer (processing will reset it when done)
+        pending = pending_transcripts.pop(call_sid, None)
+        if pending:
+            print(f"Processing pending transcript: {pending}")
+            await process_transcript(call_sid, pending)
+        else:
+            schedule_inactivity(call_sid)
 
 
 async def prompt_silence(call_sid: str):
     """Play a 'are you still there?' prompt, then restart the inactivity timer."""
     is_ai_speaking[call_sid] = True
-    mulaw_bytes = await asyncio.to_thread(
-        text_to_speech_mulaw_bytes,
-        "Hello, are you still there? How can I help you today?"
-    )
-    done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
     try:
-        await asyncio.wait_for(done_event.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
-        pass
-    is_ai_speaking[call_sid] = False
-    schedule_inactivity(call_sid)
+        mulaw_bytes = await asyncio.to_thread(
+            text_to_speech_mulaw_bytes,
+            "Hello, are you still there? How can I help you today?"
+        )
+        done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
+        try:
+            await asyncio.wait_for(done_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            pass
+    except Exception as e:
+        print(f"TTS/send failed in prompt_silence for {call_sid}: {e}")
+    finally:
+        is_ai_speaking[call_sid] = False
+        pending = pending_transcripts.pop(call_sid, None)
+        if pending:
+            print(f"Processing pending transcript after silence prompt: {pending}")
+            await process_transcript(call_sid, pending)
+        else:
+            schedule_inactivity(call_sid)
 
 
 async def end_silence(call_sid: str):
     """Play a goodbye message then hang up the call."""
     is_ai_speaking[call_sid] = True
-    mulaw_bytes = await asyncio.to_thread(
-        text_to_speech_mulaw_bytes,
-        "We still haven't heard from you. Thank you for calling Butter and Batter Bakery. Please call us back anytime. Goodbye!"
-    )
-    done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
     try:
-        await asyncio.wait_for(done_event.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
-        pass
-    is_ai_speaking[call_sid] = False
-    end_call(call_sid)
+        mulaw_bytes = await asyncio.to_thread(
+            text_to_speech_mulaw_bytes,
+            "We still haven't heard from you. Thank you for calling Butter and Batter Bakery. Please call us back anytime. Goodbye!"
+        )
+        done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
+        try:
+            await asyncio.wait_for(done_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            pass
+    except Exception as e:
+        print(f"TTS/send failed in end_silence for {call_sid}: {e}")
+    finally:
+        is_ai_speaking[call_sid] = False
+        end_call(call_sid)
 
 
 def end_call(call_sid: str):
@@ -184,15 +212,19 @@ async def handle_order_complete(call_sid: str, ai_reply: str, history: list):
 
     final_message = apply_emotion(final_message, "celebratory")
     is_ai_speaking[call_sid] = True
-    mulaw_bytes = await asyncio.to_thread(text_to_speech_mulaw_bytes, final_message)
-    done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
     try:
-        await asyncio.wait_for(done_event.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
-        pass
-
-    end_call(call_sid)
-    _cleanup_state(call_sid)
+        mulaw_bytes = await asyncio.to_thread(text_to_speech_mulaw_bytes, final_message)
+        done_event = await send_audio_to_caller(call_sid, mulaw_bytes)
+        try:
+            await asyncio.wait_for(done_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            pass
+    except Exception as e:
+        print(f"TTS/send failed in handle_order_complete for {call_sid}: {e}")
+    finally:
+        is_ai_speaking[call_sid] = False
+        end_call(call_sid)
+        _cleanup_state(call_sid)
 
 
 async def process_transcript(call_sid: str, transcript: str):
@@ -228,13 +260,13 @@ def _cleanup_state(call_sid: str):
     if timer:
         timer.cancel()
     for d in [active_websockets, stream_sids, event_loops, inactivity_counts,
-              is_ai_speaking, is_processing, call_timings]:
+              is_ai_speaking, is_processing, call_timings, pending_transcripts]:
         d.pop(call_sid, None)
     conversation_store.pop(call_sid, None)
-    # Unblock and clear any pending mark events so coroutines don't hang
-    for name, ev in list(mark_events.items()):
-        ev.set()
-    mark_events.clear()
+    # Unblock and clear only this call's pending mark events
+    stale = [name for name in mark_events if name.startswith(f"{call_sid}_")]
+    for name in stale:
+        mark_events.pop(name).set()
 
 
 async def handle_stream(websocket, call_sid: str):
@@ -252,6 +284,8 @@ async def handle_stream(websocket, call_sid: str):
             if not sentence:
                 return
             if is_ai_speaking.get(call_sid):
+                # Accumulate silently — will be picked up after AI finishes
+                transcript_buffer.append(sentence)
                 return
             # Customer spoke — reset inactivity count and timer
             inactivity_counts[call_sid] = 0
@@ -262,9 +296,12 @@ async def handle_stream(websocket, call_sid: str):
             print(f"Transcript error: {e}")
 
     def on_utterance_end(self, utterance_end, **kwargs):
-        # Discard any buffered speech that arrived while AI was talking
         if is_ai_speaking.get(call_sid):
-            transcript_buffer.clear()
+            # Customer spoke while AI was talking — hold it for after AI finishes
+            if transcript_buffer:
+                pending_transcripts[call_sid] = " ".join(transcript_buffer)
+                print(f"Pending transcript saved: {pending_transcripts[call_sid]}")
+                transcript_buffer.clear()
             return
         print("Utterance ended — customer finished speaking")
         call_timings[call_sid] = time.time()
