@@ -44,15 +44,6 @@ def detect_emotion(ai_reply: str, history: list) -> str:
     return emotion
 
 def apply_emotion(text: str, emotion: str) -> str:
-    if emotion == "celebratory":
-        return f"<speak><prosody rate='medium' pitch='medium'>{text}</prosody></speak>"
-    elif emotion == "excited":
-        return f"<speak><prosody rate='medium' pitch='high'>{text}</prosody></speak>"
-    elif emotion == "confirming":
-        return f"<speak><prosody rate='slow' pitch='low'>{text}</prosody></speak>"
-    elif emotion == "greeting":
-        return f"<speak><prosody rate='medium' pitch='medium'>{text}</prosody></speak>"
-    elif emotion == "empathetic":
-        return f"<speak><prosody rate='slow' pitch='low'>{text}</prosody></speak>"
-    else:
-        return text
+    # Deepgram Aura TTS does not support SSML prosody tags — return plain text.
+    # Emotion is still detected and logged for future use.
+    return text
