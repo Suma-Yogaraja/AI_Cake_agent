@@ -43,7 +43,7 @@ async def voice(request: Request):
         return Response("Forbidden", status_code=403)
 
     if not is_open():
-        greeting = "Hi! We're currently closed, but I can still take your order and our team will confirm it once we're back between 9am and 6pm. How can I help you?"
+        greeting = "Hi! This is Butter and Batter Bakery. We're currently closed, but I can still take your order and our team will confirm it once we're back between 9am and 6pm. How can I help you?"
     else:
         greeting = "Hello! Welcome to Butter and Batter Bakery. How can I help you today?"
 

@@ -35,12 +35,14 @@ If asked something outside your knowledge, respond naturally like a human would.
 """
 
 conversation_store = {}
+rag_cache = {}  # call_sid -> KB context string, fetched once per call
+
 
 def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
-    recent_history = history[-10:] if len(history) > 10 else history
-    conversation_context = " ".join([m["content"] for m in recent_history])
-    search_query = f"{conversation_context} {transcript}"
-    context = search_knowledge_base(search_query, 20)
+    if call_sid not in rag_cache:
+        rag_cache[call_sid] = search_knowledge_base(transcript, 20)
+        print("RAG fetched and cached for call")
+    context = rag_cache[call_sid]
     # print(f"context found: {context}")
 
     from datetime import datetime

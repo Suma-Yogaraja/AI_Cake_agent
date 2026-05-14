@@ -6,7 +6,7 @@ import uuid
 import time
 from dotenv import load_dotenv
 from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
-from app.services.llm import get_llm_response, extract_order_details
+from app.services.llm import get_llm_response, extract_order_details, rag_cache
 from app.services.tts import text_to_speech_mulaw_bytes
 from app.services.emotion import apply_emotion
 from app.db.orders import generate_order_id, save_order
@@ -260,7 +260,7 @@ def _cleanup_state(call_sid: str):
     if timer:
         timer.cancel()
     for d in [active_websockets, stream_sids, event_loops, inactivity_counts,
-              is_ai_speaking, is_processing, call_timings, pending_transcripts]:
+              is_ai_speaking, is_processing, call_timings, pending_transcripts, rag_cache]:
         d.pop(call_sid, None)
     conversation_store.pop(call_sid, None)
     # Unblock and clear only this call's pending mark events
