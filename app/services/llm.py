@@ -5,6 +5,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv()
 from app.services.rag import search_knowledge_base
+from app.models.order import OrderDetails
 
 logger = logging.getLogger(__name__)
 
@@ -89,22 +90,15 @@ def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
     logger.info(f"[{call_sid}] GPT-4o replied in {elapsed}s: {ai_reply[:80]}")
     return ai_reply
 
-def extract_order_details(history: list) -> str:
-    messages = [
-        {"role": "system", "content": """
-            Extract the order details from this conversation and return them in this exact format:
-            NAME: <customer name>
-            FLAVOUR: <cake flavour>
-            SIZE: <cake size>
-            MESSAGE: <message on cake or 'none'>
-            PHONE: <customer phone number>
-            ALLERGIES: <any allergies mentioned or 'none'>
-            Only return these 6 lines, nothing else.
-        """}
-    ] + history
-
-    result = openai_client.chat.completions.create(
+def extract_order_details(history: list) -> OrderDetails:
+    result = openai_client.beta.chat.completions.parse(
         model="gpt-4o",
-        messages=messages
+        messages=[
+            {"role": "system", "content": (
+                "Extract the cake order details from this bakery phone conversation. "
+                "Use 'none' for message or allergies if the customer did not provide them."
+            )}
+        ] + history,
+        response_format=OrderDetails,
     )
-    return result.choices[0].message.content
+    return result.choices[0].message.parsed

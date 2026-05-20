@@ -1,6 +1,7 @@
 import random
 import string
 from app.db.connection import get_db
+from app.models.order import OrderDetails
 
 def generate_order_id() -> str:
     """Generate a unique 6-digit order ID, guaranteed not already in the DB."""
@@ -18,14 +19,7 @@ def spoken_order_id(order_id: str) -> str:
     'SW-481623' -> 'S, W, 4, 8, 1, 6, 2, 3'"""
     return ", ".join(c for c in order_id if c.isalnum())
 
-def save_order(order_id, details):
-    lines = details.strip().split("\n")
-    data = {}
-    for line in lines:
-        if ":" in line:
-            key, value = line.split(":", 1)
-            data[key.strip()] = value.strip()
-
+def save_order(order_id: str, details: OrderDetails) -> None:
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("""
@@ -33,12 +27,12 @@ def save_order(order_id, details):
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             order_id,
-            data.get("NAME", "unknown"),
-            data.get("FLAVOUR", "unknown"),
-            data.get("SIZE", "unknown"),
-            data.get("MESSAGE", "none"),
-            data.get("PHONE", "unknown"),
-            data.get("ALLERGIES", "none")
+            details.name,
+            details.flavour,
+            details.size,
+            details.message,
+            details.phone,
+            details.allergies,
         ))
         conn.commit()
         cur.close()
