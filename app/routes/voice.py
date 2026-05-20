@@ -11,14 +11,14 @@ from app.services.tts import text_to_speech, cleanup_file
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_validator = RequestValidator(os.getenv("TWILIO_AUTH_TOKEN"))
 
 conversation_store = {}
 
 def validate_twilio_request(request: Request, form_data: dict) -> bool:
-    validator = RequestValidator(os.getenv("TWILIO_AUTH_TOKEN"))
     url = str(request.url)
     signature = request.headers.get("X-Twilio-Signature", "")
-    return validator.validate(url, form_data, signature)
+    return _validator.validate(url, form_data, signature)
 
 def is_open():
     now = datetime.now()

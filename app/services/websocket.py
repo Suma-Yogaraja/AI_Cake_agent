@@ -270,7 +270,7 @@ def _cleanup_state(call_sid: str):
 
 
 async def handle_stream(websocket, call_sid: str):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     event_loops[call_sid] = loop
 
     dg_connection = deepgram_client.listen.live.v("1")

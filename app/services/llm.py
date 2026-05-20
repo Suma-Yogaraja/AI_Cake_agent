@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv()
@@ -27,8 +28,7 @@ Taking orders — collect in this order:
     5. Any allergies or special requirements
     6. Phone number for confirmation
 
-Once you have all details:
-    - Once you have all details, confirm the order naturally in one short paragraph like:
+Once you have all details, confirm the order naturally in one short paragraph like:
         "Just to confirm — a 10 inch strawberry cake with no message, no allergies, for Roy. We'll call 1234567899 within 2 hours. "
     - Ask: "Is everything correct, or would you like to make any changes?"
     - If they want changes, collect the updated details and confirm again
@@ -49,7 +49,6 @@ def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
         logger.info(f"[{call_sid}] RAG fetched and cached")
     context = rag_cache[call_sid]
 
-    from datetime import datetime
     now = datetime.now()
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     current_day = days[now.weekday()]
