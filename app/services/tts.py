@@ -1,10 +1,12 @@
 import os
 import time
+import logging
 from dotenv import load_dotenv
 from deepgram import DeepgramClient, SpeakOptions
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 _deepgram = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
 
 def text_to_speech(text: str, filename: str) -> str:
@@ -16,7 +18,7 @@ def text_to_speech(text: str, filename: str) -> str:
         sample_rate=8000
     )
     _deepgram.speak.v("1").save(filename, {"text": text}, options)
-    print(f"Deepgram TTS took: {round(time.time() - start, 2)} seconds")
+    logger.info(f"Deepgram TTS (wav) took {round(time.time() - start, 2)}s")
     return filename
 
 def text_to_speech_mulaw_bytes(text: str) -> bytes:
@@ -34,7 +36,7 @@ def text_to_speech_mulaw_bytes(text: str) -> bytes:
         idx = audio.find(b'data', 12)
         if idx != -1:
             audio = audio[idx + 8:]
-    print(f"Deepgram TTS (mulaw) took: {round(time.time() - start, 2)} seconds")
+    logger.info(f"Deepgram TTS (mulaw) took {round(time.time() - start, 2)}s")
     return audio
 
 def cleanup_file(filename: str):

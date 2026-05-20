@@ -1,21 +1,23 @@
 import asyncio
 import base64
 import json
+import logging
 import os
 import uuid
 import time
 from dotenv import load_dotenv
 from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
+from twilio.rest import Client as TwilioClient
 from app.services.llm import get_llm_response, extract_order_details, rag_cache
 from app.services.tts import text_to_speech_mulaw_bytes
-from app.services.emotion import apply_emotion
-from app.db.orders import generate_order_id, save_order
+from app.db.orders import generate_order_id, save_order, spoken_order_id
 from app.routes.voice import conversation_store, is_open
-from twilio.rest import Client as TwilioClient
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 deepgram_client = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
+_twilio = TwilioClient(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 
 # Per-call state — all dicts keyed by call_sid, never shared across calls
 active_websockets = {}    # call_sid -> WebSocket
@@ -48,12 +50,11 @@ def schedule_inactivity(call_sid: str, seconds: int = 30):
 
         count = inactivity_counts.get(call_sid, 0) + 1
         inactivity_counts[call_sid] = count
-        print(f"Inactivity count for {call_sid}: {count}")
         if count == 1:
-            print("Caller silent — prompting")
+            logger.info(f"[{call_sid}] Caller silent — prompting")
             asyncio.run_coroutine_threadsafe(prompt_silence(call_sid), loop)
         else:
-            print("Caller still silent — ending call")
+            logger.info(f"[{call_sid}] Caller still silent — ending call")
             asyncio.run_coroutine_threadsafe(end_silence(call_sid), loop)
             inactivity_counts.pop(call_sid, None)
             inactivity_timers.pop(call_sid, None)
@@ -72,7 +73,7 @@ async def send_audio_to_caller(call_sid: str, mulaw_bytes: bytes) -> asyncio.Eve
     ws = active_websockets.get(call_sid)
     sid = stream_sids.get(call_sid)
     if not ws or not sid:
-        print(f"No active WebSocket for {call_sid} — cannot send audio")
+        logger.warning(f"[{call_sid}] No active WebSocket — cannot send audio")
         ev = asyncio.Event()
         ev.set()
         return ev
@@ -105,7 +106,7 @@ async def say_to_caller(call_sid: str, message: str):
     Guarantees is_ai_speaking is cleared and inactivity is reset even on failure."""
     start_time = call_timings.pop(call_sid, None)
     if start_time:
-        print(f"Total turnaround time: {round(time.time() - start_time, 2)} seconds")
+        logger.info(f"[{call_sid}] Total turnaround time: {round(time.time() - start_time, 2)}s")
 
     is_ai_speaking[call_sid] = True
     try:
@@ -114,16 +115,14 @@ async def say_to_caller(call_sid: str, message: str):
         try:
             await asyncio.wait_for(done_event.wait(), timeout=30.0)
         except asyncio.TimeoutError:
-            print(f"Mark timeout for {call_sid} — continuing anyway")
+            logger.warning(f"[{call_sid}] Mark timeout — continuing anyway")
     except Exception as e:
-        print(f"TTS/send failed for {call_sid}: {e}")
+        logger.error(f"[{call_sid}] TTS/send failed: {e}")
     finally:
         is_ai_speaking[call_sid] = False
-        # If customer spoke while AI was talking, process that now instead of
-        # resetting the inactivity timer (processing will reset it when done)
         pending = pending_transcripts.pop(call_sid, None)
         if pending:
-            print(f"Processing pending transcript: {pending}")
+            logger.info(f"[{call_sid}] Processing pending transcript: {pending}")
             await process_transcript(call_sid, pending)
         else:
             schedule_inactivity(call_sid)
@@ -143,12 +142,12 @@ async def prompt_silence(call_sid: str):
         except asyncio.TimeoutError:
             pass
     except Exception as e:
-        print(f"TTS/send failed in prompt_silence for {call_sid}: {e}")
+        logger.error(f"[{call_sid}] TTS/send failed in prompt_silence: {e}")
     finally:
         is_ai_speaking[call_sid] = False
         pending = pending_transcripts.pop(call_sid, None)
         if pending:
-            print(f"Processing pending transcript after silence prompt: {pending}")
+            logger.info(f"[{call_sid}] Processing pending transcript after silence prompt: {pending}")
             await process_transcript(call_sid, pending)
         else:
             schedule_inactivity(call_sid)
@@ -168,20 +167,15 @@ async def end_silence(call_sid: str):
         except asyncio.TimeoutError:
             pass
     except Exception as e:
-        print(f"TTS/send failed in end_silence for {call_sid}: {e}")
+        logger.error(f"[{call_sid}] TTS/send failed in end_silence: {e}")
     finally:
         is_ai_speaking[call_sid] = False
         end_call(call_sid)
 
 
 def end_call(call_sid: str):
-    twilio_client = TwilioClient(
-        os.getenv("TWILIO_ACCOUNT_SID"),
-        os.getenv("TWILIO_AUTH_TOKEN")
-    )
-    twilio_client.calls(call_sid).update(
-        twiml='<Response><Hangup/></Response>'
-    )
+    _twilio.calls(call_sid).update(twiml='<Response><Hangup/></Response>')
+    logger.info(f"[{call_sid}] Call ended")
 
 
 async def handle_order_complete(call_sid: str, ai_reply: str, history: list):
@@ -195,22 +189,22 @@ async def handle_order_complete(call_sid: str, ai_reply: str, history: list):
     order_id = generate_order_id()
     details = await asyncio.to_thread(extract_order_details, history)
     await asyncio.to_thread(save_order, order_id, details)
-    print(f"Order saved: {order_id}")
+    logger.info(f"[{call_sid}] Order saved: {order_id}")
 
+    spoken_id = spoken_order_id(order_id)
     if not is_open():
         final_message = (
             clean_reply +
-            f" Your order ID is {order_id}. Since we are currently closed, "
+            f" Your order ID is {spoken_id}. Since we are currently closed, "
             "our team will confirm your order when we reopen!"
         )
     else:
         final_message = (
             clean_reply +
-            f" Your order ID is {order_id}. Our team will call you within 2 hours "
+            f" Your order ID is {spoken_id}. Our team will call you within 2 hours "
             "to confirm. Thank you for choosing Butter and Batter Bakery. Have a wonderful day!"
         )
 
-    final_message = apply_emotion(final_message, "celebratory")
     is_ai_speaking[call_sid] = True
     try:
         mulaw_bytes = await asyncio.to_thread(text_to_speech_mulaw_bytes, final_message)
@@ -220,26 +214,32 @@ async def handle_order_complete(call_sid: str, ai_reply: str, history: list):
         except asyncio.TimeoutError:
             pass
     except Exception as e:
-        print(f"TTS/send failed in handle_order_complete for {call_sid}: {e}")
+        logger.error(f"[{call_sid}] TTS/send failed in handle_order_complete: {e}")
     finally:
         is_ai_speaking[call_sid] = False
-        end_call(call_sid)
-        _cleanup_state(call_sid)
+        pending = pending_transcripts.pop(call_sid, None)
+        if pending:
+            logger.info(f"[{call_sid}] User spoke during order completion ({pending!r}) — continuing")
+            schedule_inactivity(call_sid)
+            asyncio.ensure_future(process_transcript(call_sid, pending))
+        else:
+            end_call(call_sid)
+            _cleanup_state(call_sid)
 
 
 async def process_transcript(call_sid: str, transcript: str):
     if not transcript.strip():
         return
     if is_ai_speaking.get(call_sid):
-        print(f"AI speaking — ignoring transcript: {transcript}")
+        logger.debug(f"[{call_sid}] AI speaking — ignoring transcript: {transcript}")
         return
     if is_processing.get(call_sid):
-        print(f"Already processing for {call_sid} — ignoring: {transcript}")
+        logger.debug(f"[{call_sid}] Already processing — ignoring: {transcript}")
         return
 
     is_processing[call_sid] = True
     try:
-        print(f"User said: {transcript}")
+        logger.info(f"[{call_sid}] User said: {transcript}")
         history = conversation_store.get(call_sid, [])
         history.append({"role": "user", "content": transcript})
         ai_reply = await asyncio.to_thread(get_llm_response, call_sid, transcript, history)
@@ -284,26 +284,23 @@ async def handle_stream(websocket, call_sid: str):
             if not sentence:
                 return
             if is_ai_speaking.get(call_sid):
-                # Accumulate silently — will be picked up after AI finishes
                 transcript_buffer.append(sentence)
                 return
-            # Customer spoke — reset inactivity count and timer
             inactivity_counts[call_sid] = 0
             schedule_inactivity(call_sid)
-            print(f"Final transcript: {sentence}")
+            logger.debug(f"[{call_sid}] Final transcript: {sentence}")
             transcript_buffer.append(sentence)
         except Exception as e:
-            print(f"Transcript error: {e}")
+            logger.error(f"[{call_sid}] Transcript error: {e}")
 
     def on_utterance_end(self, utterance_end, **kwargs):
         if is_ai_speaking.get(call_sid):
-            # Customer spoke while AI was talking — hold it for after AI finishes
             if transcript_buffer:
                 pending_transcripts[call_sid] = " ".join(transcript_buffer)
-                print(f"Pending transcript saved: {pending_transcripts[call_sid]}")
+                logger.info(f"[{call_sid}] Pending transcript saved: {pending_transcripts[call_sid]}")
                 transcript_buffer.clear()
             return
-        print("Utterance ended — customer finished speaking")
+        logger.debug(f"[{call_sid}] Utterance ended")
         call_timings[call_sid] = time.time()
         if transcript_buffer:
             full_transcript = " ".join(transcript_buffer)
@@ -320,15 +317,15 @@ async def handle_stream(websocket, call_sid: str):
         language="en-IN",
         smart_format=True,
         interim_results=True,
-        utterance_end_ms="1000",
+        utterance_end_ms="1500",
         vad_events=True,
         encoding="mulaw",
         sample_rate=8000
     )
     if not dg_connection.start(options):
-        print("Failed to start Deepgram connection")
+        logger.error(f"[{call_sid}] Failed to start Deepgram connection")
         return
-    print(f"Deepgram live connection started for {call_sid}")
+    logger.info(f"[{call_sid}] Deepgram live connection started")
     schedule_inactivity(call_sid)
 
     try:
@@ -339,7 +336,7 @@ async def handle_stream(websocket, call_sid: str):
             if event == "start":
                 stream_sids[call_sid] = data["start"]["streamSid"]
                 active_websockets[call_sid] = websocket
-                print(f"Stream started — streamSid: {stream_sids[call_sid]}")
+                logger.info(f"[{call_sid}] Stream started — streamSid: {stream_sids[call_sid]}")
 
             elif event == "media":
                 # Always forward caller audio to Deepgram.
@@ -356,12 +353,12 @@ async def handle_stream(websocket, call_sid: str):
                     ev.set()
 
             elif event == "stop":
-                print(f"Stream stopped for {call_sid}")
+                logger.info(f"[{call_sid}] Stream stopped")
                 break
 
     except Exception as e:
-        print(f"WebSocket error for {call_sid}: {e}")
+        logger.error(f"[{call_sid}] WebSocket error: {e}")
     finally:
         dg_connection.finish()
         _cleanup_state(call_sid)
-        print(f"WebSocket closed for {call_sid}")
+        logger.info(f"[{call_sid}] WebSocket closed")

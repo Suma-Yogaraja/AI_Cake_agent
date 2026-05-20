@@ -1,8 +1,12 @@
 import os
+import time
+import logging
 from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv()
 from app.services.rag import search_knowledge_base
+
+logger = logging.getLogger(__name__)
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -27,23 +31,22 @@ Once you have all details:
         "Just to confirm — a 10 inch strawberry cake with no message, no allergies, for Roy. We'll call 1234567899 within 2 hours. "
     - Ask: "Is everything correct, or would you like to make any changes?"
     - If they want changes, collect the updated details and confirm again
-    - Only when customer confirms,  then add ORDER_COMPLETE on a new line
+    - Only when the customer gives a clear, unqualified confirmation ("yes", "that's correct", "perfect", "looks good") with no "but", "however", "wait", "actually", or follow-up question in the same turn — add ORDER_COMPLETE on a new line
+    - If the customer says "yes, but..." or "yes, however..." or asks a follow-up in the same breath, do NOT add ORDER_COMPLETE — address their question first
     
 You are warm, friendly and conversational — like a real person working at a bakery. 
 If asked something outside your knowledge, respond naturally like a human would.
 
 """
 
-conversation_store = {}
 rag_cache = {}  # call_sid -> KB context string, fetched once per call
 
 
 def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
     if call_sid not in rag_cache:
         rag_cache[call_sid] = search_knowledge_base(transcript, 20)
-        print("RAG fetched and cached for call")
+        logger.info(f"[{call_sid}] RAG fetched and cached")
     context = rag_cache[call_sid]
-    # print(f"context found: {context}")
 
     from datetime import datetime
     now = datetime.now()
@@ -72,20 +75,18 @@ def get_llm_response(call_sid: str, transcript: str, history: list) -> str:
         - If the customer asks about price, location, hours, delivery — the answer IS in the knowledge base above
         - Only say you'll pass to the team if the topic is completely absent from the knowledge base
         """
-        # print(f"Enhanced prompt context section: {context[:200]}")
     else:
-        print("No context added to prompt")
+        logger.warning(f"[{call_sid}] No RAG context found for query")
 
-    start_time = __import__('time').time()
+    start_time = time.time()
     completion = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "system", "content": enhanced_prompt}] + history
     )
-    end_time = __import__('time').time()
+    elapsed = round(time.time() - start_time, 2)
 
     ai_reply = completion.choices[0].message.content
-    print(f"GPT-4o took: {round(end_time - start_time, 2)} seconds")
-    print(f"AI replied: {ai_reply}")
+    logger.info(f"[{call_sid}] GPT-4o replied in {elapsed}s: {ai_reply[:80]}")
     return ai_reply
 
 def extract_order_details(history: list) -> str:

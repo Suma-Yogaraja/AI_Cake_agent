@@ -1,7 +1,10 @@
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -41,4 +44,4 @@ def validate_config():
     missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
-    print(" All environment variables loaded successfully")
+    logger.info("All environment variables loaded successfully")

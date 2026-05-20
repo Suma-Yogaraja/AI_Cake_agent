@@ -1,15 +1,16 @@
 import os
 import uuid
+import logging
 import threading
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
-from twilio.twiml.voice_response import VoiceResponse
+from twilio.twiml.voice_response import VoiceResponse, Connect
 from twilio.request_validator import RequestValidator
 from datetime import datetime
 from app.services.tts import text_to_speech, cleanup_file
-from twilio.twiml.voice_response import VoiceResponse, Connect
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 conversation_store = {}
 
@@ -17,13 +18,7 @@ def validate_twilio_request(request: Request, form_data: dict) -> bool:
     validator = RequestValidator(os.getenv("TWILIO_AUTH_TOKEN"))
     url = str(request.url)
     signature = request.headers.get("X-Twilio-Signature", "")
-    is_valid = validator.validate(url, form_data, signature)
-    print("---- TWILIO VALIDATION DEBUG ----")
-    print("URL:", url)
-    print("Signature:", signature)
-    print("Valid:", is_valid)
-    print("---------------------------------")
-    return is_valid
+    return validator.validate(url, form_data, signature)
 
 def is_open():
     now = datetime.now()
@@ -34,12 +29,11 @@ def is_open():
 @router.post("/voice")
 async def voice(request: Request):
     form = await request.form()
-    # print(f"BASE_URL is: {os.getenv('BASE_URL')}")
     call_sid = form.get("CallSid", "unknown")
     conversation_store[call_sid] = []
 
     if not validate_twilio_request(request, dict(form)):
-        print("Invalid Twilio signature — request rejected")
+        logger.warning(f"[{call_sid}] Invalid Twilio signature — request rejected")
         return Response("Forbidden", status_code=403)
 
     if not is_open():

@@ -1,20 +1,22 @@
-import os
 import random
 import string
-import psycopg2
+from app.db.connection import get_db
 
-def get_db():
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
+def generate_order_id() -> str:
+    """Generate a unique 6-digit order ID, guaranteed not already in the DB."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        while True:
+            order_id = "SW-" + "".join(random.choices(string.digits, k=6))
+            cur.execute("SELECT 1 FROM orders WHERE order_id = %s", (order_id,))
+            if not cur.fetchone():
+                cur.close()
+                return order_id
 
-def generate_order_id():
-    numbers = ''.join(random.choices(string.digits, k=4))
-    return f"SW-{numbers}"
+def spoken_order_id(order_id: str) -> str:
+    """Format order ID for TTS — commas force a pause between each character.
+    'SW-481623' -> 'S, W, 4, 8, 1, 6, 2, 3'"""
+    return ", ".join(c for c in order_id if c.isalnum())
 
 def save_order(order_id, details):
     lines = details.strip().split("\n")
@@ -24,20 +26,19 @@ def save_order(order_id, details):
             key, value = line.split(":", 1)
             data[key.strip()] = value.strip()
 
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO orders (order_id, customer_name, cake_flavour, cake_size, cake_message, customer_phone,allergies)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (
-        order_id,
-        data.get("NAME", "unknown"),
-        data.get("FLAVOUR", "unknown"),
-        data.get("SIZE", "unknown"),
-        data.get("MESSAGE", "none"),
-        data.get("PHONE", "unknown"),
-        data.get("ALLERGIES", "none")
-    ))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO orders (order_id, customer_name, cake_flavour, cake_size, cake_message, customer_phone, allergies)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (
+            order_id,
+            data.get("NAME", "unknown"),
+            data.get("FLAVOUR", "unknown"),
+            data.get("SIZE", "unknown"),
+            data.get("MESSAGE", "none"),
+            data.get("PHONE", "unknown"),
+            data.get("ALLERGIES", "none")
+        ))
+        conn.commit()
+        cur.close()

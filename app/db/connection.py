@@ -1,14 +1,24 @@
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from app.config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+import os
+import psycopg2.pool
+from contextlib import contextmanager
+from dotenv import load_dotenv
 
-def get_db_connection():
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        cursor_factory=RealDictCursor
-    )
-    return conn
+load_dotenv()
+
+_pool = psycopg2.pool.ThreadedConnectionPool(
+    minconn=2,
+    maxconn=10,
+    host=os.getenv("DB_HOST"),
+    port=os.getenv("DB_PORT"),
+    dbname=os.getenv("DB_NAME"),
+    user=os.getenv("DB_USER"),
+    password=os.getenv("DB_PASSWORD")
+)
+
+@contextmanager
+def get_db():
+    conn = _pool.getconn()
+    try:
+        yield conn
+    finally:
+        _pool.putconn(conn)
